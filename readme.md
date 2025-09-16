@@ -3,7 +3,7 @@
 Este repositorio contiene un script simple para descargar posts de X (antes Twitter) usando la API v2, orientado a una prueba rápida sobre temas de salud.
 
 ## Brief del cliente
-“Queremos con Laura hacer una prueba bajando tuits sobre una enfermedad. Que alguien averigüe cómo funciona la API. ¿Se busca por hashtags? ¿Se puede poner más de uno? Abajo van 2 ejemplos que queremos probar.”
+“Queremos hacer una prueba bajando tuits sobre una enfermedad. Averiguar cómo funciona la API. ¿Se busca por hashtags? ¿Se puede poner más de uno? Abajo van 2 ejemplos que queremos probar.”
 
 - Ejemplo 1: Enfermedad de nicho – Fabry
 - Ejemplo 2: GLP‑1 para obesidad
