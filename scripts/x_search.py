@@ -14,6 +14,7 @@ import re
 
 @dataclass
 class TweetRecord:
+	"""Estructura de datos para almacenar información de un tuit"""
 	id: str
 	date: str
 	user_username: str
@@ -33,52 +34,31 @@ class TweetRecord:
 	referenced_tweet_text: Optional[str] = None
 
 
+# Grupos predefinidos de hashtags para búsquedas temáticas
 PRESETS = {
 	"fabry": [
-		"#Fabry",
-		"#FabryDisease",
-		"#FabryAwareness",
-		"#FabryHeroes",
-		"#LivingWithFabry",
-		"#FabryTreatment",
-		"#FabryCommunity",
-		"#EnfermedadDeFabry",
-		"#FabryEspañol",
-		"#FabryLatAm",
-		"#DiagnósticoPrecozFabry",
-		"#TratamientoFabry",
-		"#VisibilidadFabry",
-		"#VidaConFabry",
-		"#HéroesFabry",
-		"#MesDeConcienciaciónFabry",
-		"#GenéticaFabry",
+		"#Fabry", "#FabryDisease", "#FabryAwareness", "#FabryHeroes",
+		"#LivingWithFabry", "#FabryTreatment", "#FabryCommunity",
+		"#EnfermedadDeFabry", "#FabryEspañol", "#FabryLatAm",
+		"#DiagnósticoPrecozFabry", "#TratamientoFabry", "#VisibilidadFabry",
+		"#VidaConFabry", "#HéroesFabry", "#MesDeConcienciaciónFabry", "#GenéticaFabry",
 	],
 	"glp1": [
-		"#GLP1",
-		"#GLP-1",
-		"#Semaglutide",
-		"#Ozempic",
-		"#Wegovy",
-		"#Mounjaro",
-		"#Obesity",
-		"#WeightLossJourney",
-		"#ObesityTreatment",
-		"#WeightManagement",
-		"#GLP1Drugs",
-		"#GLP1Medications",
-		"#Obesidad",
-		"#SaludMetabólica",
-		"#EfectosSecundariosGLP1",
-		"#MedicamentosObesidad",
+		"#GLP1", "#GLP-1", "#Semaglutide", "#Ozempic", "#Wegovy", "#Mounjaro",
+		"#Obesity", "#WeightLossJourney", "#ObesityTreatment", "#WeightManagement",
+		"#GLP1Drugs", "#GLP1Medications", "#Obesidad", "#SaludMetabólica",
+		"#EfectosSecundariosGLP1", "#MedicamentosObesidad",
 	],
 }
 
 
 def ymd_to_rfc3339(date_ymd: str, end_of_day: bool = False) -> str:
+	"""Convierte fecha YYYY-MM-DD a formato RFC3339 para la API de Twitter"""
 	return f"{date_ymd}T23:59:59Z" if end_of_day else f"{date_ymd}T00:00:00Z"
 
 
 def build_query(hashtags: List[str], lang: Optional[str]) -> str:
+	"""Construye query de búsqueda combinando hashtags con OR y filtro de idioma"""
 	terms: List[str] = []
 	if hashtags:
 		or_group = " OR ".join(hashtags)
@@ -89,6 +69,7 @@ def build_query(hashtags: List[str], lang: Optional[str]) -> str:
 
 
 def get_client(wait_on_rate_limit: bool) -> tweepy.Client:
+	"""Inicializa cliente de Twitter API con token de autenticación"""
 	load_dotenv()
 	bearer = os.getenv("X_BEARER_TOKEN") or os.getenv("TWITTER_BEARER_TOKEN")
 	if not bearer:
@@ -97,6 +78,7 @@ def get_client(wait_on_rate_limit: bool) -> tweepy.Client:
 
 
 def map_users(includes: Optional[Dict]) -> Dict[str, Dict[str, str]]:
+	"""Mapea información de usuarios desde la respuesta de la API"""
 	user_map: Dict[str, Dict[str, str]] = {}
 	if includes and "users" in includes:
 		for u in includes["users"]:
@@ -108,28 +90,17 @@ def map_users(includes: Optional[Dict]) -> Dict[str, Dict[str, str]]:
 
 
 def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start_time: Optional[str], end_time: Optional[str], debug: bool = False) -> List[TweetRecord]:
+	"""Busca tuits usando la API de Twitter y extrae toda la información relevante"""
 	rows: List[TweetRecord] = []
-	# API v2 allows up to 100 per page for recent search
-	max_per_page = 100
+	max_per_page = 100  # Máximo permitido por la API
 	fetched = 0
 
+	# Configuración de la búsqueda
 	kwargs = {
 		"query": query,
-		"tweet_fields": [
-			"id",
-			"created_at",
-			"lang",
-			"public_metrics",
-			"entities",
-			"referenced_tweets",
-			"conversation_id",
-			"in_reply_to_user_id",
-		],
+		"tweet_fields": ["id", "created_at", "lang", "public_metrics", "entities", "referenced_tweets", "conversation_id", "in_reply_to_user_id"],
 		"user_fields": ["id", "name", "username"],
-		"expansions": [
-			"author_id",
-			"referenced_tweets.id",
-		],
+		"expansions": ["author_id", "referenced_tweets.id"],
 		"max_results": max_per_page,
 	}
 	if start_time:
@@ -142,6 +113,7 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 		print(f"📅 Time range: {start_time or 'any'} to {end_time or 'now'}")
 		print(f"📊 Max per page: {max_per_page}, limit: {limit or 'none'}")
 
+	# Búsqueda paginada
 	paginator = tweepy.Paginator(client.search_recent_tweets, **kwargs)
 	try:
 		for page in tqdm(paginator, desc="Fetching tweets"):
@@ -153,32 +125,36 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 					if 'next_token' in meta:
 						print(f"➡️  Next token available: {meta['next_token'][:20]}...")
 			
+			# Procesar respuesta de la API
 			includes = getattr(page, "includes", None)
 			users_by_id = map_users(includes)
-			# Build a map of referenced tweets to access their text
+			
+			# Mapear tuits referenciados para obtener su texto
 			referenced_tweets_map: Dict[str, Dict] = {}
 			if includes and "tweets" in includes:
 				for it in includes["tweets"]:
 					ref_id = str(it.get("id"))
 					if ref_id:
 						referenced_tweets_map[ref_id] = it
+			
+			# Procesar cada tuit
 			for t in page.data or []:
 				metrics = t.data.get("public_metrics", {})
 				author_id = t.data.get("author_id")
 				user = users_by_id.get(author_id, {"username": "", "name": ""})
+				
+				# Extraer URLs expandidas
 				entities = t.data.get("entities", {}) or {}
 				urls_entity = entities.get("urls", []) or []
-				expanded_urls = []
-				for u in urls_entity:
-					expanded = u.get("expanded_url") or u.get("url")
-					if expanded:
-						expanded_urls.append(expanded)
+				expanded_urls = [u.get("expanded_url") or u.get("url") for u in urls_entity if u.get("expanded_url") or u.get("url")]
 
-				# Determine referenced tweet info
+				# Determinar tipo de tuit (RT, cita, reply)
 				referenced_list = t.data.get("referenced_tweets", []) or []
 				is_retweet = any(r.get("type") == "retweeted" for r in referenced_list)
 				is_quote = any(r.get("type") == "quoted" for r in referenced_list)
 				is_reply = any(r.get("type") == "replied_to" for r in referenced_list)
+				
+				# Obtener texto del tuit referenciado
 				first_ref_id = None
 				first_ref_text = None
 				if referenced_list:
@@ -186,6 +162,7 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 					if first_ref_id and first_ref_id in referenced_tweets_map:
 						first_ref_text = referenced_tweets_map[first_ref_id].get("text")
 
+				# Crear registro del tuit
 				rows.append(TweetRecord(
 					id=str(t.id),
 					date=str(t.created_at),
@@ -230,24 +207,26 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 
 
 def clean_text_for_csv(text: str) -> str:
-	"""Clean text to avoid CSV formatting issues with excessive line breaks"""
+	"""Limpia texto para evitar problemas de formato en CSV (alturas excesivas)"""
 	if not text:
 		return text
-	# Replace multiple consecutive line breaks with single space
+	# Reemplazar saltos de línea múltiples con espacio simple
 	text = re.sub(r'\n+', ' ', text)
-	# Replace multiple spaces with single space
+	# Reemplazar espacios múltiples con espacio simple
 	text = re.sub(r' +', ' ', text)
-	# Strip leading/trailing whitespace
+	# Eliminar espacios al inicio y final
 	return text.strip()
 
 def write_output(rows: List[TweetRecord], out_dir: str, out_format: str, meta: Optional[Dict] = None) -> str:
+	"""Guarda los resultados en CSV, XLSX o JSON con metadatos de búsqueda"""
 	os.makedirs(out_dir, exist_ok=True)
 	timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 	filename = f"tweets_{timestamp}.{out_format}"
 	out_path = os.path.join(out_dir, filename)
 	
 	data = [asdict(r) for r in rows]
-	# Attach search metadata as constant columns so the CSV clearly states the query used
+	
+	# Agregar metadatos de búsqueda a cada fila para trazabilidad
 	if meta:
 		for rec in data:
 			rec["search_query"] = meta.get("query")
@@ -258,13 +237,14 @@ def write_output(rows: List[TweetRecord], out_dir: str, out_format: str, meta: O
 			rec["search_until"] = meta.get("until")
 			rec["search_executed_at"] = meta.get("executed_at")
 	
-	# Clean text fields to avoid CSV formatting issues
+	# Limpiar campos de texto para evitar problemas de formato
 	for rec in data:
 		rec["content"] = clean_text_for_csv(rec.get("content", ""))
 		rec["referenced_tweet_text"] = clean_text_for_csv(rec.get("referenced_tweet_text", ""))
 	
 	df = pd.DataFrame(data)
 	
+	# Guardar según formato solicitado
 	if out_format == "csv":
 		df.to_csv(out_path, index=False, encoding="utf-8-sig")
 	elif out_format == "xlsx":
@@ -282,30 +262,33 @@ def write_output(rows: List[TweetRecord], out_dir: str, out_format: str, meta: O
 
 
 def parse_args() -> argparse.Namespace:
+	"""Configura y parsea argumentos de línea de comandos"""
 	parser = argparse.ArgumentParser(description="Search tweets via X API v2.")
 	group = parser.add_mutually_exclusive_group(required=True)
-	group.add_argument("--hashtags", nargs="*", help="List of hashtags/terms to OR together.")
-	group.add_argument("--preset", choices=sorted(PRESETS.keys()), help="Use a preset group of hashtags.")
-	parser.add_argument("--since", help="Start date YYYY-MM-DD inclusive.")
-	parser.add_argument("--until", help="End date YYYY-MM-DD exclusive.")
-	parser.add_argument("--lang", help="ISO 639-1 language code filter, e.g. es or en.")
-	parser.add_argument("--limit", type=int, help="Max number of posts to fetch.")
-	parser.add_argument("--out", help="[Deprecated] Ignored; files are saved with timestamp in data/.")
-	parser.add_argument("--format", choices=["csv", "xlsx", "json"], default="csv", help="Output format.")
-	parser.add_argument("--no-wait", action="store_true", help="Do not sleep on rate limit; return partial results.")
-	parser.add_argument("--debug", action="store_true", help="Show detailed API response info and troubleshooting tips.")
+	group.add_argument("--hashtags", nargs="*", help="Lista de hashtags/términos a combinar con OR")
+	group.add_argument("--preset", choices=sorted(PRESETS.keys()), help="Usar grupo predefinido de hashtags")
+	parser.add_argument("--since", help="Fecha inicio YYYY-MM-DD (inclusiva)")
+	parser.add_argument("--until", help="Fecha fin YYYY-MM-DD (exclusiva)")
+	parser.add_argument("--lang", help="Filtro de idioma ISO 639-1, ej: es o en")
+	parser.add_argument("--limit", type=int, help="Número máximo de posts a obtener")
+	parser.add_argument("--out", help="[Deprecated] Ignorado; archivos se guardan con timestamp en data/")
+	parser.add_argument("--format", choices=["csv", "xlsx", "json"], default="csv", help="Formato de salida")
+	parser.add_argument("--no-wait", action="store_true", help="No esperar en rate limit; devolver resultados parciales")
+	parser.add_argument("--debug", action="store_true", help="Mostrar información detallada de respuesta API y tips")
 	return parser.parse_args()
 
 
 def main() -> None:
+	"""Función principal: ejecuta búsqueda de tuits y guarda resultados"""
 	args = parse_args()
 	hashtags = args.hashtags if args.hashtags else PRESETS.get(args.preset, [])
 	query = build_query(hashtags, args.lang)
-	# Compute times
+	
+	# Calcular rangos de tiempo
 	start_time = ymd_to_rfc3339(args.since) if args.since else None
 	end_time = None
 	if args.until:
-		# If until is today, set to now-20s to satisfy API requirement
+		# Si until es hoy, ajustar a 20s antes para cumplir requisitos de API
 		today_ymd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 		if args.until == today_ymd:
 			end_time = (datetime.now(timezone.utc) - timedelta(seconds=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -319,9 +302,11 @@ def main() -> None:
 		print(f"📅 Date range: {args.since or 'any'} to {args.until or 'now'}")
 		print(f"⏱️  Wait on rate limit: {not args.no_wait}")
 	
+	# Ejecutar búsqueda
 	client = get_client(wait_on_rate_limit=(not args.no_wait))
 	rows = search_tweets(client, query, args.limit, start_time, end_time, debug=args.debug)
-	# Build metadata to persist alongside results
+	
+	# Preparar metadatos para trazabilidad
 	meta = {
 		"query": query,
 		"preset": args.preset,
@@ -332,6 +317,7 @@ def main() -> None:
 		"executed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 	}
 
+	# Mostrar resultados o guardar archivo
 	if len(rows) == 0:
 		print("⚠️  No posts found. Possible reasons:")
 		print("   • Rate limit exceeded (wait ~15 minutes)")
