@@ -9,6 +9,7 @@ import pandas as pd
 from tqdm import tqdm
 from dotenv import load_dotenv
 import tweepy
+import re
 
 
 @dataclass
@@ -25,6 +26,11 @@ class TweetRecord:
 	lang: Optional[str]
 	url: str
 	external_urls: Optional[str]
+	is_retweet: bool = False
+	is_quote: bool = False
+	is_reply: bool = False
+	referenced_tweet_id: Optional[str] = None
+	referenced_tweet_text: Optional[str] = None
 
 
 PRESETS = {
@@ -103,7 +109,8 @@ def map_users(includes: Optional[Dict]) -> Dict[str, Dict[str, str]]:
 
 def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start_time: Optional[str], end_time: Optional[str], debug: bool = False) -> List[TweetRecord]:
 	rows: List[TweetRecord] = []
-	max_per_page = 50
+	# API v2 allows up to 100 per page for recent search
+	max_per_page = 100
 	fetched = 0
 
 	kwargs = {
@@ -114,9 +121,15 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 			"lang",
 			"public_metrics",
 			"entities",
+			"referenced_tweets",
+			"conversation_id",
+			"in_reply_to_user_id",
 		],
 		"user_fields": ["id", "name", "username"],
-		"expansions": ["author_id"],
+		"expansions": [
+			"author_id",
+			"referenced_tweets.id",
+		],
 		"max_results": max_per_page,
 	}
 	if start_time:
@@ -142,6 +155,13 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 			
 			includes = getattr(page, "includes", None)
 			users_by_id = map_users(includes)
+			# Build a map of referenced tweets to access their text
+			referenced_tweets_map: Dict[str, Dict] = {}
+			if includes and "tweets" in includes:
+				for it in includes["tweets"]:
+					ref_id = str(it.get("id"))
+					if ref_id:
+						referenced_tweets_map[ref_id] = it
 			for t in page.data or []:
 				metrics = t.data.get("public_metrics", {})
 				author_id = t.data.get("author_id")
@@ -154,12 +174,29 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 					if expanded:
 						expanded_urls.append(expanded)
 
+				# Determine referenced tweet info
+				referenced_list = t.data.get("referenced_tweets", []) or []
+				is_retweet = any(r.get("type") == "retweeted" for r in referenced_list)
+				is_quote = any(r.get("type") == "quoted" for r in referenced_list)
+				is_reply = any(r.get("type") == "replied_to" for r in referenced_list)
+				first_ref_id = None
+				first_ref_text = None
+				if referenced_list:
+					first_ref_id = str(referenced_list[0].get("id")) if referenced_list[0].get("id") else None
+					if first_ref_id and first_ref_id in referenced_tweets_map:
+						first_ref_text = referenced_tweets_map[first_ref_id].get("text")
+
 				rows.append(TweetRecord(
 					id=str(t.id),
 					date=str(t.created_at),
 					user_username=user.get("username", ""),
 					user_displayname=user.get("name", ""),
 					content=t.text,
+					is_retweet=is_retweet,
+					is_quote=is_quote,
+					is_reply=is_reply,
+					referenced_tweet_id=first_ref_id,
+					referenced_tweet_text=first_ref_text,
 					like_count=int(metrics.get("like_count", 0)),
 					retweet_count=int(metrics.get("retweet_count", 0)),
 					reply_count=int(metrics.get("reply_count", 0)),
@@ -192,17 +229,53 @@ def search_tweets(client: tweepy.Client, query: str, limit: Optional[int], start
 	return rows
 
 
-def write_output(rows: List[TweetRecord], out_dir: str, out_format: str) -> str:
+def clean_text_for_csv(text: str) -> str:
+	"""Clean text to avoid CSV formatting issues with excessive line breaks"""
+	if not text:
+		return text
+	# Replace multiple consecutive line breaks with single space
+	text = re.sub(r'\n+', ' ', text)
+	# Replace multiple spaces with single space
+	text = re.sub(r' +', ' ', text)
+	# Strip leading/trailing whitespace
+	return text.strip()
+
+def write_output(rows: List[TweetRecord], out_dir: str, out_format: str, meta: Optional[Dict] = None) -> str:
 	os.makedirs(out_dir, exist_ok=True)
 	timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 	filename = f"tweets_{timestamp}.{out_format}"
 	out_path = os.path.join(out_dir, filename)
+	
+	data = [asdict(r) for r in rows]
+	# Attach search metadata as constant columns so the CSV clearly states the query used
+	if meta:
+		for rec in data:
+			rec["search_query"] = meta.get("query")
+			rec["search_preset"] = meta.get("preset")
+			rec["search_hashtags"] = " ".join(meta.get("hashtags", [])) if meta.get("hashtags") else None
+			rec["search_lang"] = meta.get("lang")
+			rec["search_since"] = meta.get("since")
+			rec["search_until"] = meta.get("until")
+			rec["search_executed_at"] = meta.get("executed_at")
+	
+	# Clean text fields to avoid CSV formatting issues
+	for rec in data:
+		rec["content"] = clean_text_for_csv(rec.get("content", ""))
+		rec["referenced_tweet_text"] = clean_text_for_csv(rec.get("referenced_tweet_text", ""))
+	
+	df = pd.DataFrame(data)
+	
 	if out_format == "csv":
-		df = pd.DataFrame([asdict(r) for r in rows])
-		df.to_csv(out_path, index=False)
+		df.to_csv(out_path, index=False, encoding="utf-8-sig")
+	elif out_format == "xlsx":
+		df.to_excel(out_path, index=False, engine='openpyxl')
 	elif out_format == "json":
+		payload = {
+			"meta": meta or {},
+			"data": [asdict(r) for r in rows],
+		}
 		with open(out_path, "w", encoding="utf-8") as f:
-			json.dump([asdict(r) for r in rows], f, ensure_ascii=False, indent=2)
+			json.dump(payload, f, ensure_ascii=False, indent=2)
 	else:
 		raise ValueError("Unsupported format: " + out_format)
 	return out_path
@@ -218,7 +291,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--lang", help="ISO 639-1 language code filter, e.g. es or en.")
 	parser.add_argument("--limit", type=int, help="Max number of posts to fetch.")
 	parser.add_argument("--out", help="[Deprecated] Ignored; files are saved with timestamp in data/.")
-	parser.add_argument("--format", choices=["csv", "json"], default="csv", help="Output format.")
+	parser.add_argument("--format", choices=["csv", "xlsx", "json"], default="csv", help="Output format.")
 	parser.add_argument("--no-wait", action="store_true", help="Do not sleep on rate limit; return partial results.")
 	parser.add_argument("--debug", action="store_true", help="Show detailed API response info and troubleshooting tips.")
 	return parser.parse_args()
@@ -248,8 +321,17 @@ def main() -> None:
 	
 	client = get_client(wait_on_rate_limit=(not args.no_wait))
 	rows = search_tweets(client, query, args.limit, start_time, end_time, debug=args.debug)
-	out_path = write_output(rows, out_dir=os.path.join(".", "data"), out_format=args.format)
-	
+	# Build metadata to persist alongside results
+	meta = {
+		"query": query,
+		"preset": args.preset,
+		"hashtags": hashtags,
+		"lang": args.lang,
+		"since": args.since,
+		"until": args.until,
+		"executed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+	}
+
 	if len(rows) == 0:
 		print("⚠️  No posts found. Possible reasons:")
 		print("   • Rate limit exceeded (wait ~15 minutes)")
@@ -257,6 +339,7 @@ def main() -> None:
 		print("   • No recent posts match your query")
 		print("   • Try removing --lang filter or using --debug for details")
 	else:
+		out_path = write_output(rows, out_dir=os.path.join(".", "data"), out_format=args.format, meta=meta)
 		print(f"✅ Saved {len(rows)} posts to {out_path}")
 
 
